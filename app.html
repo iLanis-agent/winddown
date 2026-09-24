@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WindDown - App</title>
+<style>
+  :root { --bg:#0c1016; --card:#131a24; --edge:#243144; --ink:#e9eef6; --dim:#93a4bb; --accent:#7ba7f0; --good:#5ecf7a; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--ink); min-height:100vh; padding:28px 18px 60px; }
+  .wrap { max-width:760px; margin:0 auto; }
+  header { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:22px; }
+  h1 { font-size:1.5rem; } h1 .d { color:var(--accent); }
+  a.home { color:var(--dim); text-decoration:none; font-size:0.9rem; }
+  section { background:var(--card); border:1px solid var(--edge); border-radius:14px; padding:20px; margin-bottom:20px; }
+  h2 { font-size:1.05rem; margin-bottom:14px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  .field { display:flex; flex-direction:column; gap:5px; flex:1; min-width:110px; }
+  label { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.6px; color:var(--dim); }
+  input, button { font:inherit; border-radius:8px; border:1px solid var(--edge); padding:10px 12px; background:#0c1016; color:var(--ink); }
+  input:focus { outline:none; border-color:var(--accent); }
+  button { cursor:pointer; background:var(--accent); border:none; color:#0b1a33; font-weight:700; }
+  button:hover { filter:brightness(1.1); }
+  .now { text-align:center; padding:8px 0; }
+  .now .big { font-size:2.6rem; font-weight:800; letter-spacing:-1px; color:var(--accent); }
+  .now .sub { color:var(--dim); margin-top:6px; font-size:0.95rem; }
+  .steps { display:grid; gap:8px; }
+  .step { display:flex; align-items:center; gap:12px; background:#0c1016; border:1px solid var(--edge); border-radius:10px; padding:12px 14px; }
+  .step .time { font-weight:700; min-width:64px; color:var(--accent); }
+  .step.done { opacity:0.45; }
+  .step.done .time { color:var(--dim); }
+  .step.now { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; }
+  .stat { background:#0c1016; border:1px solid var(--edge); border-radius:10px; padding:14px; }
+  .stat .v { font-size:1.35rem; font-weight:700; color:var(--accent); }
+  .stat .l { color:var(--dim); font-size:0.78rem; margin-top:3px; }
+  .note { color:var(--dim); font-size:0.85rem; margin-top:12px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Wind<span class="d">Down</span></h1>
+    <a class="home" href="index.html">&larr; Home</a>
+  </header>
+
+  <section>
+    <h2>Your times</h2>
+    <div class="row">
+      <div class="field"><label>Bedtime</label><input id="f-bed" type="time" value="23:00"></div>
+      <div class="field"><label>Wake time</label><input id="f-wake" type="time" value="07:00"></div>
+    </div>
+    <div class="note" id="sleep-note"></div>
+  </section>
+
+  <section id="now-section" style="display:none">
+    <h2>Right now</h2>
+    <div class="now">
+      <div class="big" id="now-big">-</div>
+      <div class="sub" id="now-sub"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Tonight's wind-down</h2>
+    <div class="steps" id="steps"></div>
+    <div class="row" style="margin-top:14px">
+      <button id="f-complete">Mark tonight's wind-down done</button>
+    </div>
+    <div class="note" id="done-note"></div>
+  </section>
+
+  <section>
+    <h2>Your record</h2>
+    <div class="stats">
+      <div class="stat"><div class="v" id="s-nights">0</div><div class="l">wind-down nights logged</div></div>
+      <div class="stat"><div class="v" id="s-streak">0</div><div class="l">night streak</div></div>
+      <div class="stat"><div class="v" id="s-sleep">-</div><div class="l">planned sleep tonight</div></div>
+      <div class="stat"><div class="v" id="s-tobed">-</div><div class="l">minutes to bed</div></div>
+    </div>
+  </section>
+</div>
+
+<script src="engine.js"></script>
+<script>
+(function () {
+  var PREF = 'winddown-prefs';
+  var NIGHTS = 'winddown-nights';
+  var $ = function (id) { return document.getElementById(id); };
+
+  function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREF)) || {}; } catch (e) { return {}; } }
+  function savePrefs(p) { localStorage.setItem(PREF, JSON.stringify(p)); }
+  function loadNights() { try { return JSON.parse(localStorage.getItem(NIGHTS)) || []; } catch (e) { return []; } }
+  function saveNights(n) { localStorage.setItem(NIGHTS, JSON.stringify(n)); }
+
+  var prefs = loadPrefs();
+  if (prefs.bed) $('f-bed').value = prefs.bed;
+  if (prefs.wake) $('f-wake').value = prefs.wake;
+
+  function fmtClock(d) { return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+  function dateKey(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  var timer = null;
+
+  function render() {
+    var bed = $('f-bed').value || '23:00';
+    var wake = $('f-wake').value || '07:00';
+    savePrefs({ bed: bed, wake: wake });
+
+    var now = new Date();
+    var sched = WindEngine.schedule(bed, now);
+    var hrs = WindEngine.sleepHours(bed, wake);
+    var toBed = WindEngine.minutesToBed(bed, now);
+
+    $('sleep-note').textContent = 'Bed at ' + fmtClock(sched.bedtime) + ', up at ' + wake + ' - ' + hrs + ' hours of sleep. Wind-down starts at ' + fmtClock(sched.steps[0].at) + '.';
+    $('s-sleep').textContent = hrs + 'h';
+    $('s-tobed').textContent = toBed >= 60 ? Math.floor(toBed / 60) + 'h ' + (toBed % 60) + 'm' : toBed + 'm';
+
+    var cur = WindEngine.currentStep(sched, now);
+    var nxt = WindEngine.nextStep(sched, now);
+    var inWindow = cur !== null && now.getTime() < sched.bedtime.getTime();
+
+    if (inWindow) {
+      $('now-section').style.display = 'block';
+      $('now-big').textContent = cur.label;
+      $('now-sub').textContent = nxt
+        ? 'Next: ' + nxt.label + ' at ' + fmtClock(nxt.at) + ' - bed in ' + toBed + ' min.'
+        : 'Last step - bed at ' + fmtClock(sched.bedtime) + '.';
+    } else {
+      $('now-section').style.display = 'none';
+    }
+
+    var stepsEl = $('steps');
+    stepsEl.innerHTML = '';
+    sched.steps.forEach(function (s) {
+      var div = document.createElement('div');
+      var isNow = cur && cur.id === s.id && inWindow;
+      div.className = 'step' + (s.at.getTime() < now.getTime() && !isNow ? ' done' : '') + (isNow ? ' now' : '');
+      div.innerHTML = '<span class="time">' + fmtClock(s.at) + '</span><span></span>';
+      div.querySelector('span:last-child').textContent = s.label;
+      stepsEl.appendChild(div);
+    });
+
+    var nights = loadNights();
+    $('s-nights').textContent = nights.length;
+    $('s-streak').textContent = WindEngine.streak(nights, now);
+    var tonight = dateKey(sched.bedtime);
+    $('done-note').textContent = nights.some(function (n) { return n.date === tonight; })
+      ? 'Tonight is logged. Sleep well.'
+      : '';
+
+    if (timer) clearInterval(timer);
+    timer = setInterval(render, 30000);
+  }
+
+  $('f-complete').addEventListener('click', function () {
+    var bed = $('f-bed').value || '23:00';
+    var sched = WindEngine.schedule(bed, new Date());
+    var nights = loadNights();
+    var key = dateKey(sched.bedtime);
+    if (!nights.some(function (n) { return n.date === key; })) {
+      nights.push({ date: key, loggedAt: new Date().toISOString() });
+      saveNights(nights);
+    }
+    render();
+  });
+
+  $('f-bed').addEventListener('change', render);
+  $('f-wake').addEventListener('change', render);
+  render();
+})();
+</script>
+</body>
+</html>
